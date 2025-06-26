@@ -1,0 +1,46 @@
+# ── Runtime artefacts ────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.so
+*.dylib
+
+# ── Virtual-envs (local or Poetry) ───────────────────────────────────────────
+venv/
+.venv/
+
+# ── MLX / Hugging Face caches ───────────────────────────────────────────────
+# Local model checkpoints (can be many GB; keep a requirements.txt pointing to HF instead)
+*.mlx
+*.safetensors
+*.gguf
+.cache/
+# Optionally ignore *all* HF cache dirs in your home folder
+# ~/.cache/huggingface/*
+
+# ── Logs & profiling ────────────────────────────────────────────────────────
+*.log
+*.prof
+*.out
+
+# ── macOS cruft ─────────────────────────────────────────────────────────────
+.DS_Store
+
+# ── Editor / IDE folders ────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+
+# ── Uvicorn reload artefacts ───────────────────────────────────────────────
+*.pid
+.reload/
+
+# ── Container / CI ─────────────────────────────────────────────────────────
+# If you later add a Docker-compose stack
+.env
+docker-volume/
+
+# ── Coverage / test artefacts ──────────────────────────────────────────────
+htmlcov/
+.coverage
+.pytest_cache/
+
