@@ -26,7 +26,8 @@ import time
 import uuid
 from typing import AsyncGenerator, List
 
-import mlx_lm as mxlm
+from mlx_lm.utils import load
+from mlx_lm.generate import stream_generate
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -56,6 +57,13 @@ def parse_args() -> argparse.Namespace:  # noqa: D401
                         type=int,
                         default=8889,
                         help="Port for Uvicorn")
+    parser.add_argument("--chunk-size",
+                        type=int,
+                        default=1,
+                        help="Number of tokens per chunk (1 = immediate streaming)")
+    parser.add_argument("--debug-chunks",
+                        action="store_true",
+                        help="Print chunk information for debugging")
     return parser.parse_args()
 
 
@@ -67,7 +75,7 @@ args = parse_args()
 
 
 print(f"[server] Loading model '{args.model}' … (first run can take ~10 s)")
-model, tokenizer = mxlm.load(args.model)
+model, tokenizer = load(args.model)
 # TOOD: figure out how to use `compile=True` (update mlx?)
 # model, tokenizer = mxlm.load(args.model, compile=True)
 model.eval()
@@ -123,7 +131,7 @@ def build_prompt(messages: List[ChatMessage]) -> str:
 # TODO - add support for temperature, top_p, etc.
 def generate_tokens(prompt: str, *, max_tokens: int):
     """Wrapper around mlx_lm.generate so we can call it sync/async."""
-    for chunk in mxlm.stream_generate(
+    for chunk in stream_generate(
             model,
             tokenizer,
             prompt,
@@ -156,26 +164,62 @@ async def chat(req: ChatRequest):
         print("==== STREAMING ====")
 
         async def event_stream() -> AsyncGenerator[str, None]:
-            collected_tokens: list[str] = []
             max_tokens = req.max_tokens or 10_000  # Provide default if None
+            chunk_size = args.chunk_size
+            token_buffer = []
 
             for tok in generate_tokens(prompt,
                                        max_tokens=max_tokens,
                                        ):
+                token_buffer.append(tok)
+                # Send chunk when buffer is full or if chunk_size is 1
+
+                if len(token_buffer) >= chunk_size:
+                    combined_content = "".join(token_buffer)
+                    if args.debug_chunks:
+                        print(f"[DEBUG] Sending chunk: \
+                                {repr(combined_content)} \
+                                (size: {len(token_buffer)} tokens)")
+                    chunk = {
+                        "id": comp_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": MODEL_NAME,
+                        "choices": [{
+                            "delta": {"content": combined_content},
+                            "index": 0,
+                            "finish_reason": None,
+                        }],
+                    }
+                    # Send chunk immediately with explicit flush
+                    chunk_data = f"data: \
+                            {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    yield chunk_data
+                    # Force immediate transmission
+                    import asyncio
+                    await asyncio.sleep(0)  # Yield control to event loop
+                    token_buffer = []
+
+            # Send any remaining tokens
+            if token_buffer:
+                combined_content = "".join(token_buffer)
+                if args.debug_chunks:
+                    print(f"[DEBUG] Sending final chunk: \
+                            {repr(combined_content)} \
+                            (size: {len(token_buffer)} tokens)")
                 chunk = {
                     "id": comp_id,
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": MODEL_NAME,
                     "choices": [{
-                        "delta": {"content": tok},
+                        "delta": {"content": combined_content},
                         "index": 0,
                         "finish_reason": None,
                     }],
                 }
-                collected_tokens.append(tok)
-                # tok is already a string from GenerationResponse.text
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
             # final message signalling completion
             yield (
                 "data: "
@@ -196,7 +240,15 @@ async def chat(req: ChatRequest):
 
         return StreamingResponse(
                 event_stream(),
-                media_type="text/event-stream"
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",  # Disable nginx buffering
+                    "Transfer-Encoding": "chunked",
+                }
                 )
 
     # ── non‑stream case ────────────────────────────────────────────────────
@@ -231,5 +283,10 @@ if __name__ == "__main__":
         reload=True,
         workers=1,
         http="h11",
+        access_log=False,  # Reduce logging overhead
+        log_level="warning",  # Reduce logging overhead
+        # Disable buffering for immediate streaming
+        limit_concurrency=1,
+        limit_max_requests=0,
     )
 
