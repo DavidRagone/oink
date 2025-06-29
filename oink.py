@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:  # noqa: D401
         "--model",
         "-m",
         default=os.getenv(
-            "MODEL_ID", "mlx-community/Mistral-7B-Instruct-v0.3-4bit"
+            "MODEL_ID", "mlx-community/Mistral-7B-Instruct-v0.3-8bit"
             ),
         help="HF repo or local path of the model to load",
     )
@@ -71,10 +71,6 @@ model, tokenizer = mxlm.load(args.model)
 # TOOD: figure out how to use `compile=True` (update mlx?)
 # model, tokenizer = mxlm.load(args.model, compile=True)
 model.eval()
-# warm‑up JIT graph so the *next* request is instant
-_ = "".join(
-        mxlm.generate(model, tokenizer, "warmup", max_tokens=1)
-    )
 print("[server] Model ready → starting API")
 
 # ---------------------------------------------------------------------------
@@ -103,7 +99,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     model: str
     messages: List[ChatMessage]
-    max_tokens: int | None = 256
+    max_tokens: int | None = 10_000
     temperature: float | None = 0.7
     stream: bool | None = False
 
@@ -157,9 +153,12 @@ async def chat(req: ChatRequest):
     created = int(time.time())
 
     if req.stream:
+        print("==== STREAMING ====")
+
         async def event_stream() -> AsyncGenerator[str, None]:
             collected_tokens: list[str] = []
-            max_tokens = req.max_tokens or 256  # Provide default if None
+            max_tokens = req.max_tokens or 10_000  # Provide default if None
+
             for tok in generate_tokens(prompt,
                                        max_tokens=max_tokens,
                                        ):
@@ -201,7 +200,7 @@ async def chat(req: ChatRequest):
                 )
 
     # ── non‑stream case ────────────────────────────────────────────────────
-    max_tokens = req.max_tokens or 256  # Provide default if None
+    max_tokens = req.max_tokens or 10_000  # Provide default if None
     answer = "".join(generate_tokens(prompt,
                                      max_tokens=max_tokens,
                                      ))
@@ -226,10 +225,10 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-        app,
+        "oink:app",
         host=args.host,
         port=args.port,
-        reload=False,
+        reload=True,
         workers=1,
         http="h11",
     )
