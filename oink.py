@@ -1,11 +1,13 @@
-""" Over-provisioned Inference ‘N’ Kit (OINK)
+""" Over-provisioned Inference 'N' Kit (OINK)
 
 A simple OpenAI‑compatible server on MLX + FastAPI for use on ridiculously 
 over-provisioned local hardware like the Mac M3 Ultra.
 
 Run with:
-    pip install "fastapi>=0.111" "uvicorn[standard]>=0.29" "pydantic>=2.7" mlx_lm
-    python openai_compat_fastapi_mlx.py --model mlx-community/Mistral-7B-Instruct-v0.3-4bit
+    pip install "fastapi>=0.111" "uvicorn[standard]>=0.29" "pydantic>=2.7" \
+            mlx_lm
+    python openai_compat_fastapi_mlx.py --model mlx-community/\
+            Mistral-7B-Instruct-v0.3-4bit
 
 Then point the OpenAI Python SDK at:
     openai.base_url = "http://localhost:8889/v1"
@@ -62,11 +64,17 @@ args = parse_args()
 # ---------------------------------------------------------------------------
 # ─── MODEL INITIALISATION ───────────────────────────────────────────────────
 # ---------------------------------------------------------------------------
+
+
 print(f"[server] Loading model '{args.model}' … (first run can take ~10 s)")
-model, tokenizer = mxlm.load(args.model, compile=True)
+model, tokenizer = mxlm.load(args.model)
+# TOOD: figure out how to use `compile=True` (update mlx?)
+# model, tokenizer = mxlm.load(args.model, compile=True)
 model.eval()
 # warm‑up JIT graph so the *next* request is instant
-_ = model.generate("warmup", max_tokens=1, stream=False)
+_ = "".join(
+        mxlm.generate(model, tokenizer, "warmup", max_tokens=1)
+    )
 print("[server] Model ready → starting API")
 
 # ---------------------------------------------------------------------------
@@ -116,12 +124,18 @@ def build_prompt(messages: List[ChatMessage]) -> str:
     return "\n".join(lines)
 
 
-def generate_tokens(prompt: str, *, max_tokens: int, temperature: float):
+# TODO - add support for temperature, top_p, etc.
+def generate_tokens(prompt: str, *, max_tokens: int):
     """Wrapper around mlx_lm.generate so we can call it sync/async."""
-    return model.generate(prompt,
-                          max_tokens=max_tokens,
-                          temperature=temperature,
-                          stream=True)
+    for chunk in mxlm.stream_generate(
+            model,
+            tokenizer,
+            prompt,
+            max_tokens=max_tokens):
+        # stream_generate returns GenerationResponse objects, not dictionaries
+        text = chunk.text
+        if text:  # Only yield non-empty text
+            yield text
 
 
 # ---------------------------------------------------------------------------
@@ -145,9 +159,10 @@ async def chat(req: ChatRequest):
     if req.stream:
         async def event_stream() -> AsyncGenerator[str, None]:
             collected_tokens: list[str] = []
+            max_tokens = req.max_tokens or 256  # Provide default if None
             for tok in generate_tokens(prompt,
-                                       max_tokens=req.max_tokens,
-                                       temperature=req.temperature):
+                                       max_tokens=max_tokens,
+                                       ):
                 chunk = {
                     "id": comp_id,
                     "object": "chat.completion.chunk",
@@ -160,6 +175,7 @@ async def chat(req: ChatRequest):
                     }],
                 }
                 collected_tokens.append(tok)
+                # tok is already a string from GenerationResponse.text
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
             # final message signalling completion
             yield (
@@ -185,9 +201,10 @@ async def chat(req: ChatRequest):
                 )
 
     # ── non‑stream case ────────────────────────────────────────────────────
+    max_tokens = req.max_tokens or 256  # Provide default if None
     answer = "".join(generate_tokens(prompt,
-                                     max_tokens=req.max_tokens,
-                                     temperature=req.temperature))
+                                     max_tokens=max_tokens,
+                                     ))
     return {
         "id": comp_id,
         "object": "chat.completion",
@@ -209,10 +226,11 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-        "openai_compat_fastapi_mlx:app",
+        app,
         host=args.host,
         port=args.port,
         reload=False,
         workers=1,
+        http="h11",
     )
 

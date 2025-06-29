@@ -59,9 +59,8 @@ $ pip install "fastapi>=0.111" "uvicorn[standard]>=0.29" "pydantic>=2.7" mlx_lm
 
 # 3 / Choose a model (HF repo or local path)
 $ export MODEL_ID=mlx-community/Mistral-7B-Instruct-v0.3-4bit
-
-# (Optional) raise macOS wired‑memory ceiling
-$ python oink.py --configure-macos   # see § Configuration & tuning
+# or, for example, use Qwen-1.5-7B:
+$ export MODEL_ID=mlx-community/Qwen3-30B-A3B-8bit
 
 # 4 / Launch the pig 🚀
 $ python oink.py --model $MODEL_ID --host 0.0.0.0 --port 8000
